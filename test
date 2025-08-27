@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>City Chomp — Grow-the-Hole!</title>
+  <style>
+    /* --- Reset & Base --- */
+    html, body { height: 100%; margin: 0; padding: 0; }
+    body { background: #0b1020; color: #eaf2ff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; overflow: hidden; }
+    canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100vh; touch-action: none; }
+
+    /* --- UI Overlay --- */
+    .hud { position: fixed; inset: 0; pointer-events: none; display: grid; grid-template-rows: auto 1fr auto; padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
+    .hud-top { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 8px; }
+    .pill { background: rgba(9, 14, 30, 0.6); border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 6px 20px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.03); border-radius: 999px; padding: 10px 14px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); pointer-events: auto; }
+    .score, .timer, .level { font-weight: 700; letter-spacing: 0.3px; font-variant-numeric: tabular-nums; }
+    .score b, .timer b { font-size: 1.2rem; }
+
+    .hud-center { display: grid; place-items: center; pointer-events: none; }
+    .big-banner { pointer-events: auto; background: rgba(13, 18, 40, 0.72); border: 1px solid rgba(255,255,255,0.08); border-radius: 24px; padding: 18px 20px; max-width: min(92vw, 520px); text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+    .big-banner h1 { margin: 0 0 8px; font-size: clamp(22px, 5vw, 32px); }
+    .big-banner p { margin: 0 0 12px; color: #cdd9ff; }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; }
+    .button { pointer-events: auto; cursor: pointer; border: 0; border-radius: 999px; padding: 12px 16px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase; background: linear-gradient(180deg, #4f9cff, #2b6bff); color: #fff; box-shadow: 0 8px 24px rgba(43,107,255,.46); }
+    .button.secondary { background: rgba(255,255,255,0.08); box-shadow: none; }
+
+    .hud-bottom { display: grid; grid-template-columns: 1fr auto; padding: 8px; gap: 8px; align-items: end; }
+
+    /* --- Virtual Stick --- */
+    .stick { pointer-events: auto; width: 140px; height: 140px; border-radius: 999px; background: radial-gradient(100% 100% at 50% 50%, rgba(255,255,255,.08), rgba(255,255,255,0.02)); border: 1px solid rgba(255,255,255,0.08); position: relative; touch-action: none; user-select: none; }
+    .stick.dead { opacity: .55; }
+    .stick .nub { position: absolute; width: 68px; height: 68px; border-radius: 50%; left: 36px; top: 36px; background: linear-gradient(180deg, rgba(255,255,255,.9), rgba(220,232,255,.8)); box-shadow: 0 10px 28px rgba(0,0,0,.45); mix-blend-mode: screen; }
+
+    /* --- Right Controls --- */
+    .ctrls { display: flex; gap: 8px; pointer-events: auto; align-items: center; justify-content: end; padding-right: 6px; }
+    .ctrl { width: 60px; height: 60px; border-radius: 16px; display: grid; place-items: center; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 6px 18px rgba(0,0,0,.35); cursor: pointer; }
+
+    .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 12vh; background: rgba(12,18,30,.9); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 10px 40px rgba(0,0,0,.5); color: #fff; padding: 12px 16px; border-radius: 14px; pointer-events: none; opacity: 0; transition: opacity .35s ease; }
+    .toast.show { opacity: 1; }
+
+    /* --- Tooltips --- */
+    .hint { position: fixed; top: 72px; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); color: #cfe0ff; padding: 8px 12px; border-radius: 10px; font-size: 12px; display: none; }
+
+    /* --- Pause Overlay --- */
+    .pause { position: fixed; inset: 0; display: none; place-items: center; background: rgba(4,6,10,.52); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+    .pause.show { display: grid; }
+
+    /* --- Debug --- */
+    .debug { position: fixed; right: 6px; bottom: 6px; background: rgba(0,0,0,.35); color: #9fd8ff; padding: 4px 6px; font-size: 11px; border-radius: 8px; border: 1px solid rgba(255,255,255,.08); display: none; }
+
+    @media (min-width: 1024px) {
+      /* show keyboard hint on desktop */
+      .hint { display: inline-block; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div class="hud">
+    <div class="hud-top">
+      <div class="pill score">Score: <b id="score">0</b></div>
+      <div class="pill level">Size: <b id="size">0.50m</b></div>
+      <div class="pill timer">⏱ <b id="timer">03:00</b></div>
+    </div>
+
+    <div class="hud-center">
+      <div class="big-banner" id="banner" style="display:none">
+        <h1 id="banner-title">City Chomp</h1>
+        <p id="banner-sub">Drag the stick to move. Eat small things to grow. Bigger you are → bigger things you can swallow.</p>
+        <div class="row">
+          <button class="button" id="btn-start">Start</button>
+          <button class="button secondary" id="btn-how">How to Play</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="hud-bottom">
+      <div class="stick dead" id="stick">
+        <div class="nub" id="nub"></div>
+      </div>
+      <div class="ctrls">
+        <div class="ctrl" id="btn-pause" title="Pause/Resume">⏸</div>
+        <div class="ctrl" id="btn-restart" title="Restart">↻</div>
+        <div class="ctrl" id="btn-zoom" title="Zoom">🔍</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pause" id="pause">
+    <div class="big-banner">
+      <h1>Paused</h1>
+      <p>Tap Resume to continue chomping.</p>
+      <div class="row">
+        <button class="button" id="btn-resume">Resume</button>
+        <button class="button secondary" id="btn-exit">Exit</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="hint">Desktop: WASD / Arrow keys to move, Space to dash</div>
+  <div class="debug" id="debug"></div>
+
+  <script>
+  /*
+    City Chomp — a mobile-friendly HTML5 canvas game.
+    You are a hole. Eat small objects, grow, and score points before the timer runs out.
+
+    Features
+    - Touch joystick + keyboard controls
+    - Camera following & zoom
+    - Procedural city blocks (streets, sidewalks, decorations)
+    - Size-gated consumption with animated sink effect
+    - Point values scale with object size and rarity
+    - Timer, pause, restart, toast hints
+    - Quadtree spatial index for perf
+    - Particle effects for flavor
+
+    Implementation Note
+    This file is intentionally verbose (>1000 lines) with comments for clarity and learning.
+  */
+
+  // -----------------------------
+  // Utilities
+  // -----------------------------
+  const TAU = Math.PI * 2;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const invLerp = (a, b, v) => (v - a) / (b - a);
+  const dist2 = (ax, ay, bx, by) => {
+    const dx = ax - bx, dy = ay - by; return dx*dx + dy*dy;
+  };
+  const rand = (a=1, b=null) => b===null ? Math.random()*a : a + Math.random()*(b-a);
+  const rint = (a, b=null) => Math.floor(rand(a, b));
+  const chance = (p) => Math.random() < p;
+  const pick = (arr) => arr[Math.floor(Math.random()*arr.length)];
+  const now = () => performance.now();
+  const fmt = (n) => n.toLocaleString();
+
+  // Deterministic RNG (seeded) for repeatable maps
+  function RNG(seed) {
+    let s = seed >>> 0;
+    return () => (s = (s * 1664525 + 1013904223) >>> 0) / 0xffffffff;
+  }
+
+  // Easing
+  const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+  const easeInOutQuad = t => t < .5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2;
+
+  // Colors
+  const COLORS = {
+    bg: '#0b1020',
+    road: '#1a1f33',
+    sidewalk: '#2a314a',
+    grass: '#12301f',
+    line: '#8fa9ff',
+    car: '#8bd3ff',
+    person: '#ffe28b',
+    tree: '#5cff9a',
+    bench: '#d4c3a3',
+    trash: '#b0b9c4',
+    building: '#8999b8',
+    rare: '#ff90e8',
+    hole: '#05070f',
+    holeEdge: '#0f1a39',
+    shadow: 'rgba(0,0,0,.35)',
+  };
+
+  // -----------------------------
+  // Canvas & Camera
+  // -----------------------------
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  function resize() {
+    const w = Math.floor(window.innerWidth * DPR);
+    const h = Math.floor(window.innerHeight * DPR);
+    canvas.width = w; canvas.height = h;
+    canvas.style.width = '100vw'; canvas.style.height = '100vh';
+  }
+  window.addEventListener('resize', resize, { passive: true });
+  resize();
+
+  const Camera = {
+    x: 0, y: 0, zoom: 1,
+    targetZoom: 1,
+    apply() { ctx.setTransform(this.zoom, 0, 0, this.zoom, Math.floor(canvas.width/2 - this.x*this.zoom), Math.floor(canvas.height/2 - this.y*this.zoom)); },
+    screenToWorld(sx, sy) {
+      const x = (sx * DPR - (canvas.width/2 - this.x*this.zoom)) / this.zoom;
+      const y = (sy * DPR - (canvas.height/2 - this.y*this.zoom)) / this.zoom;
+      return { x, y };
+    },
+  };
+
+  // -----------------------------
+  // Input: Virtual Stick + Keyboard
+  // -----------------------------
+  const stick = document.getElementById('stick');
+  const nub = document.getElementById('nub');
+  let stickActive = false, stickId = -1, stickStart = {x:0,y:0}, stickVec = {x:0,y:0};
+  const STICK_RADIUS = 64; // px
+  const MAX_SPEED = 280; // world units/sec (scaled by size)
+
+  function setStick(x, y) {
+    nub.style.left = `${clamp(x, -40, 72) + 36}px`;
+    nub.style.top = `${clamp(y, -40, 72) + 36}px`;
+  }
+  function resetStick() { stickVec.x = 0; stickVec.y = 0; setStick(0,0); stick.classList.add('dead'); }
+
+  function handleTouchStart(e) {
+    for (const t of e.changedTouches) {
+      if (stickActive) continue;
+      stickActive = true; stickId = t.identifier; stick.classList.remove('dead');
+      const r = stick.getBoundingClientRect();
+      stickStart.x = r.left + r.width/2; stickStart.y = r.top + r.height/2;
+      const dx = t.clientX - stickStart.x; const dy = t.clientY - stickStart.y;
+      const mag = Math.hypot(dx, dy);
+      const nx = (dx / Math.max(1, mag)) * Math.min(STICK_RADIUS, mag);
+      const ny = (dy / Math.max(1, mag)) * Math.min(STICK_RADIUS, mag);
+      setStick(nx/2, ny/2);
+      stickVec.x = nx / STICK_RADIUS; stickVec.y = ny / STICK_RADIUS;
+    }
+  }
+  function handleTouchMove(e) {
+    for (const t of e.changedTouches) if (t.identifier === stickId) {
+      const dx = t.clientX - stickStart.x; const dy = t.clientY - stickStart.y;
+      const mag = Math.hypot(dx, dy);
+      const nx = (dx / Math.max(1, mag)) * Math.min(STICK_RADIUS, mag);
+      const ny = (dy / Math.max(1, mag)) * Math.min(STICK_RADIUS, mag);
+      setStick(nx/2, ny/2);
+      stickVec.x = nx / STICK_RADIUS; stickVec.y = ny / STICK_RADIUS;
+    }
+  }
+  function handleTouchEnd(e) {
+    for (const t of e.changedTouches) if (t.identifier === stickId) {
+      stickActive = false; stickId = -1; resetStick();
+    }
+  }
+  stick.addEventListener('touchstart', handleTouchStart, { passive: true });
+  stick.addEventListener('touchmove', handleTouchMove, { passive: true });
+  stick.addEventListener('touchend', handleTouchEnd, { passive: true });
+  stick.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+
+  // Keyboard
+  const keys = new Set();
+  window.addEventListener('keydown', e => { keys.add(e.key.toLowerCase()); });
+  window.addEventListener('keyup', e => { keys.delete(e.key.toLowerCase()); });
+
+  function readInputVec() {
+    let vx = stickVec.x, vy = stickVec.y;
+    if (keys.has('arrowleft') || keys.has('a')) vx -= 1;
+    if (keys.has('arrowright') || keys.has('d')) vx += 1;
+    if (keys.has('arrowup') || keys.has('w')) vy -= 1;
+    if (keys.has('arrowdown') || keys.has('s')) vy += 1;
+    const m = Math.hypot(vx, vy);
+    if (m > 1e-3) { vx /= m; vy /= m; }
+    else { vx = 0; vy = 0; }
+    return { x: vx, y: vy };
+  }
+
+  // -----------------------------
+  // Game Entities
+  // -----------------------------
+  const ENT = { OBJ: 1, PLAYER: 2, PARTICLE: 3 };
+
+  class Entity {
+    constructor(x, y) { this.x = x; this.y = y; this.dead = false; }
+    step(dt) {}
+    draw(ctx) {}
+  }
+
+  class Particle extends Entity {
+    constructor(x,y,vx,vy,life,rad,color) {
+      super(x,y); this.vx=vx; this.vy=vy; this.life=life; this.t=0; this.rad=rad; this.color=color; }
+    step(dt) { this.t+=dt; this.x+=this.vx*dt; this.y+=this.vy*dt; if (this.t>=this.life) this.dead=true; }
+    draw(ctx) { ctx.globalAlpha = 1 - this.t/this.life; ctx.fillStyle=this.color; ctx.beginPath(); ctx.arc(this.x,this.y,this.rad,0,TAU); ctx.fill(); ctx.globalAlpha=1; }
+  }
+
+  // Consumables
+  const CATS = {
+    MICRO: 0, SMALL: 1, MED: 2, LARGE: 3, XL: 4, XXL: 5,
+  };
+  const CAT_NAMES = ['Micro','Small','Medium','Large','XL','XXL'];
+  const CAT_THRESHOLDS = [0.5, 1.2, 2.5, 5, 10, 20]; // meters hole radius needed (approx)
+
+  const OBJECT_TYPES = [
+    { key: 'can',     r: .15, cat: CATS.MICRO,  color: COLORS.trash,   score: 5 },
+    { key: 'cone',    r: .22, cat: CATS.MICRO,  color: '#ffb56b',      score: 7 },
+    { key: 'rat',     r: .25, cat: CATS.MICRO,  color: '#bdbdbd',      score: 9 },
+
+    { key: 'apple',   r: .3,  cat: CATS.SMALL,  color: '#96ff8f',      score: 12 },
+    { key: 'pigeon',  r: .35, cat: CATS.SMALL,  color: '#cfe3ff',      score: 16 },
+    { key: 'ball',    r: .4,  cat: CATS.SMALL,  color: '#9ac0ff',      score: 20 },
+
+    { key: 'plant',   r: .6,  cat: CATS.MED,    color: COLORS.tree,    score: 28 },
+    { key: 'bench',   r: .7,  cat: CATS.MED,    color: COLORS.bench,   score: 35 },
+    { key: 'trash',   r: .8,  cat: CATS.MED,    color: COLORS.trash,   score: 40 },
+
+    { key: 'human',   r: 1.0, cat: CATS.LARGE,  color: COLORS.person,  score: 60 },
+    { key: 'scooter', r: 1.2, cat: CATS.LARGE,  color: '#fff',         score: 80 },
+    { key: 'car',     r: 1.8, cat: CATS.LARGE,  color: COLORS.car,     score: 120 },
+
+    { key: 'van',     r: 2.4, cat: CATS.XL,     color: '#a6d9ff',      score: 180 },
+    { key: 'tree',    r: 3.0, cat: CATS.XL,     color: COLORS.tree,    score: 220 },
+    { key: 'statue',  r: 3.5, cat: CATS.XL,     color: COLORS.rare,    score: 300 },
+
+    { key: 'bus',     r: 4.5, cat: CATS.XXL,    color: '#ffd38b',      score: 500 },
+    { key: 'kiosk',   r: 5.5, cat: CATS.XXL,    color: '#c7cff1',      score: 650 },
+    { key: 'house',   r: 7.5, cat: CATS.XXL,    color: COLORS.building,score: 1200 },
+  ];
+
+  const TYPE_BY_KEY = Object.fromEntries(OBJECT_TYPES.map(o => [o.key, o]));
+
+  class Obj extends Entity {
+    constructor(type, x, y) {
+      super(x,y); this.type = type; this.r = type.r; this.cat = type.cat; this.color = type.color; this.score = type.score; this.sinking = 0; this.spin = rand(-1,1); }
+    step(dt) {
+      if (this.sinking>0) {
+        this.sinking += dt; this.r *= (1 - dt*1.5); if (this.r < 0.02) this.dead = true;
+      }
+    }
+    draw(ctx) {
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.spin*0.2);
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.max(0.02, this.r), 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  class Player extends Entity {
+    constructor(x,y) {
+      super(x,y); this.r = 0.5; this.vx=0; this.vy=0; this.speed=MAX_SPEED; this.mass= this.r * this.r * Math.PI; this.score=0; this.eaten=0; this.combo=0; this.bestCombo=0; this.dash=0; this.invuln=0; }
+    capacityRadius() { // how big an object we can swallow comfortably
+      // Effective swallow limit grows slightly faster than literal radius
+      return this.r * 0.92;
+    }
+    grow(amount) {
+      this.mass += amount; this.r = Math.sqrt(this.mass / Math.PI);
+      document.getElementById('size').textContent = `${this.r.toFixed(2)}m`;
+      // camera zoom out smoothly as we grow
+      Camera.targetZoom = clamp(lerp(1.3, 0.7, invLerp(0.5, 8, this.r)), 0.55, 1.35);
+    }
+    addScore(s) {
+      this.score += s; UI.setScore(this.score);
+    }
+    step(dt) {
+      const input = readInputVec();
+      const speedScale = clamp(lerp(1.2, 0.6, invLerp(0.5, 8, this.r)), 0.45, 1.25);
+      const spd = this.speed * speedScale * (1 + (this.dash>0?0.8:0));
+      this.vx = input.x * spd; this.vy = input.y * spd;
+      this.x += this.vx * dt; this.y += this.vy * dt;
+      if (this.dash>0) { this.dash -= dt; }
+      if (this.invuln>0) this.invuln -= dt;
+    }
+    draw(ctx) {
+      // shadow
+      ctx.fillStyle = COLORS.shadow; ctx.beginPath(); ctx.arc(this.x+this.r*0.06, this.y+this.r*0.06, this.r*1.05, 0, TAU); ctx.fill();
+      // hole
+      const grd = ctx.createRadialGradient(this.x-this.r*0.2, this.y-this.r*0.2, this.r*0.2, this.x, this.y, this.r*1.1);
+      grd.addColorStop(0, COLORS.hole);
+      grd.addColorStop(1, COLORS.holeEdge);
+      ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, TAU); ctx.fill();
+      // outline
+      ctx.lineWidth = Math.max(1, this.r*0.08); ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.beginPath(); ctx.arc(this.x, this.y, this.r*1.02, 0, TAU); ctx.stroke();
+    }
+  }
+
+  // -----------------------------
+  // Spatial Index (Quadtree)
+  // -----------------------------
+  class Quad {
+    constructor(x,y,w,h, depth=0) {
+      this.x=x; this.y=y; this.w=w; this.h=h; this.depth=depth; this.children=null; this.items=[];
+    }
+    subdivide() {
+      const hw = this.w/2, hh = this.h/2; const x=this.x, y=this.y;
+      this.children = [
+        new Quad(x, y, hw, hh, this.depth+1),
+        new Quad(x+hw, y, hw, hh, this.depth+1),
+        new Quad(x, y+hh, hw, hh, this.depth+1),
+        new Quad(x+hw, y+hh, hw, hh, this.depth+1)
+      ];
+      for (const it of this.items) this._insert(it);
+      this.items.length = 0;
+    }
+    _insert(it) {
+      const ix = it.x, iy = it.y;
+      const mx = this.x + this.w/2, my = this.y + this.h/2;
+      const idx = (iy < my ? 0 : 2) + (ix < mx ? 0 : 1);
+      this.children[idx].insert(it);
+    }
+    insert(it) {
+      if (this.children) { this._insert(it); return; }
+      this.items.push(it);
+      if (this.items.length > 8 && this.depth < 8) this.subdivide();
+    }
+    query(cx,cy,r, out=[]) {
+      // if circle intersects node
+      const dx = Math.max(0, Math.max(this.x - cx, cx - (this.x+this.w)));
+      const dy = Math.max(0, Math.max(this.y - cy, cy - (this.y+this.h)));
+      if (dx*dx + dy*dy > r*r) return out;
+      if (this.children) { for (const c of this.children) c.query(cx,cy,r,out); }
+      else { for (const it of this.items) out.push(it); }
+      return out;
+    }
+    clear() { this.children=null; this.items.length=0; }
+  }
+
+  // -----------------------------
+  // World Generation
+  // -----------------------------
+  const WORLD = { W: 300, H: 300, seed: rint(0, 9999999) };
+  const rng = RNG(WORLD.seed);
+
+  function genWorld() {
+    // create blocks: roads every 40m with sidewalks
+    const roads = [];
+    for (let x= -WORLD.W; x<=WORLD.W; x+= 40) roads.push({ x, y: -WORLD.H, w: 6, h: WORLD.H*2, vert: true });
+    for (let y= -WORLD.H; y<=WORLD.H; y+= 40) roads.push({ x: -WORLD.W, y, w: WORLD.W*2, h: 6, vert: false });
+
+    const deco = [];
+    function scatter(typeKey, count, minR=0.2, maxR=1.6, avoidRoad=8) {
+      for (let i=0;i<count;i++) {
+        let x, y; let tries=0;
+        do {
+          x = rand(-WORLD.W+6, WORLD.W-6); y = rand(-WORLD.H+6, WORLD.H-6); tries++;
+        } while (tries<50 && roads.some(r => Math.abs((r.vert?x:y) - (r.vert?r.x:r.y)) < avoidRoad));
+        deco.push({ key: typeKey, x, y, r: rand(minR, maxR) });
+      }
+    }
+
+    // Populate city with a spectrum of sizes
+    scatter('can', 250, .12, .22, 4);
+    scatter('cone', 150, .18, .26, 6);
+    scatter('rat', 130, .2, .28, 6);
+    scatter('apple', 200, .25, .35, 8);
+    scatter('pigeon', 120, .3, .4, 8);
+    scatter('ball', 120, .35, .45, 10);
+    scatter('plant', 140, .5, .7, 10);
+    scatter('bench', 110, .6, .8, 12);
+    scatter('trash', 110, .6, .9, 12);
+    scatter('human', 140, .9, 1.1, 12);
+    scatter('scooter', 90, 1.0, 1.4, 12);
+    scatter('car', 100, 1.6, 2.0, 12);
+    scatter('van', 70, 2.0, 2.6, 14);
+    scatter('tree', 70, 2.6, 3.6, 16);
+    scatter('statue', 20, 3.2, 3.8, 18);
+    scatter('bus', 18, 4.0, 4.8, 18);
+    scatter('kiosk', 16, 5.0, 6.0, 20);
+    scatter('house', 10, 7.0, 8.5, 22);
+
+    return { roads, deco };
+  }
+
+  const MAP = genWorld();
+
+  // -----------------------------
+  // Game State & Systems
+  // -----------------------------
+  const UI = {
+    scoreEl: document.getElementById('score'),
+    timerEl: document.getElementById('timer'),
+    banner: document.getElementById('banner'),
+    bannerTitle: document.getElementById('banner-title'),
+    bannerSub: document.getElementById('banner-sub'),
+    toast: document.getElementById('toast'),
+    debug: document.getElementById('debug'),
+    setScore(v) { this.scoreEl.textContent = fmt(Math.floor(v)); },
+    setTime(s) {
+      const m = Math.floor(s/60), sec = Math.max(0, Math.floor(s%60));
+      this.timerEl.textContent = `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    },
+    showBanner(title, sub, show=true) {
+      this.bannerTitle.textContent = title; this.bannerSub.textContent = sub || '';
+      this.banner.style.display = show? 'block' : 'none';
+    },
+    showToast(text, ms=1400) {
+      this.toast.textContent = text; this.toast.classList.add('show');
+      clearTimeout(this.toast._t); this.toast._t = setTimeout(()=> this.toast.classList.remove('show'), ms);
+    },
+    setPaused(p) { document.getElementById('pause').classList.toggle('show', p); },
+  };
+
+  const GAME = {
+    entities: [],
+    objects: [],
+    particles: [],
+    quad: new Quad(-WORLD.W-10, -WORLD.H-10, (WORLD.W+10)*2, (WORLD.H+10)*2),
+    player: new Player(0,0),
+    time: 180, // seconds
+    running: false,
+    zoomMode: 0,
+    reset() {
+      this.entities.length=0; this.objects.length=0; this.particles.length=0; this.quad.clear();
+      this.player = new Player(0,0); Camera.x=0; Camera.y=0; Camera.zoom=1.0; Camera.targetZoom=1.2;
+      // Instantiate objects from MAP.deco
+      for (const d of MAP.deco) {
+        const type = TYPE_BY_KEY[d.key];
+        const o = new Obj(type, d.x, d.y); o.r = d.r; this.objects.push(o); this.entities.push(o); this.quad.insert(o);
+      }
+      this.entities.push(this.player);
+      this.time = 180; UI.setTime(this.time);
+      UI.setScore(0); document.getElementById('size').textContent = `${this.player.r.toFixed(2)}m`;
+      UI.showBanner('City Chomp', 'Drag the stick to move. Eat small things to grow. Bigger you are → bigger things you can swallow.', true);
+      this.running = false; resetStick();
+    },
+  };
+
+  GAME.reset();
+
+  // -----------------------------
+  // Consumption & Scoring
+  // -----------------------------
+  function canSwallow(player, obj) {
+    return obj.r <= player.capacityRadius();
+  }
+
+  function consume(player, obj) {
+    // sink animation
+    obj.sinking = 0.001; obj.spin *= 3;
+    // score: base * (1 + obj.r) * rarity multiplier
+    const catWeight = 1 + obj.cat * 0.35; // bigger category gives more points
+    const gained = Math.round(obj.score * (1 + obj.r*0.2) * catWeight);
+    player.addScore(gained);
+    player.eaten++;
+    player.combo += 1; player.bestCombo = Math.max(player.bestCombo, player.combo);
+    player.grow(obj.r*obj.r * Math.PI * 0.45); // absorb 45% of area as mass
+    // particles
+    for (let i=0;i<8;i++) {
+      const a = rand(0,TAU), v = rand(0.6, 2.2); const vx = Math.cos(a)*v, vy = Math.sin(a)*v;
+      GAME.particles.push(new Particle(obj.x, obj.y, vx, vy, rand(.2,.6), rand(.04,.12), 'rgba(255,255,255,.85)'));
+    }
+    // occasional toasts
+    if (chance(0.05)) UI.showToast(`+${fmt(gained)} pts`);
+  }
+
+  // -----------------------------
+  // Collision Query & Update
+  // -----------------------------
+  function updateWorld(dt) {
+    // rebuild quadtree sparsely (cheap for static objects)
+    GAME.quad.clear(); for (const o of GAME.objects) if (!o.dead) GAME.quad.insert(o);
+
+    // move entities
+    for (const e of GAME.entities) if (!e.dead) e.step(dt);
+    for (const p of GAME.particles) if (!p.dead) p.step(dt);
+
+    // interactions
+    const P = GAME.player;
+    const nearby = GAME.quad.query(P.x, P.y, P.r * 1.6, []);
+    for (const o of nearby) {
+      if (o.dead || o.sinking>0) continue;
+      const d2 = dist2(P.x, P.y, o.x, o.y);
+      const rr = (P.r * 0.98);
+      if (d2 < (rr*rr)) {
+        // inside hole radius — check size gate
+        if (canSwallow(P, o)) {
+          consume(P, o);
+        } else {
+          // bonk: small knockback & lose combo
+          if (P.invuln<=0) {
+            const dx = o.x - P.x, dy = o.y - P.y; const m = Math.hypot(dx,dy)||1; const nx=dx/m, ny=dy/m;
+            P.x -= nx * 0.6; P.y -= ny * 0.6; P.invuln = 0.1; P.combo = 0;
+          }
+        }
+      }
+    }
+
+    // purge dead
+    GAME.objects = GAME.objects.filter(o => !o.dead);
+    GAME.particles = GAME.particles.filter(p => !p.dead);
+  }
+
+  // -----------------------------
+  // Rendering
+  // -----------------------------
+  function drawWorld() {
+    // background
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.fillStyle = COLORS.bg; ctx.fillRect(0,0,canvas.width, canvas.height);
+
+    // camera follow
+    const P = GAME.player; Camera.x = lerp(Camera.x, P.x, 0.12); Camera.y = lerp(Camera.y, P.y, 0.12); Camera.zoom = lerp(Camera.zoom, Camera.targetZoom, 0.02);
+    Camera.apply();
+
+    // ground
+    ctx.fillStyle = COLORS.grass; ctx.fillRect(-WORLD.W, -WORLD.H, WORLD.W*2, WORLD.H*2);
+
+    // roads
+    for (const r of MAP.roads) {
+      ctx.fillStyle = COLORS.road; ctx.fillRect(r.x, r.y, r.w, r.h);
+      // lane line
+      if (r.vert) {
+        ctx.strokeStyle = COLORS.line; ctx.lineWidth = 0.3; ctx.setLineDash([2,3]);
+        ctx.beginPath(); ctx.moveTo(r.x + r.w/2, r.y); ctx.lineTo(r.x + r.w/2, r.y + r.h); ctx.stroke(); ctx.setLineDash([]);
+      } else {
+        ctx.strokeStyle = COLORS.line; ctx.lineWidth = 0.3; ctx.setLineDash([2,3]);
+        ctx.beginPath(); ctx.moveTo(r.x, r.y + r.h/2); ctx.lineTo(r.x + r.w, r.y + r.h/2); ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+
+    // sidewalks hint (grid)
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.lineWidth = 0.5;
+    for (let x = -WORLD.W; x <= WORLD.W; x += 4) { ctx.beginPath(); ctx.moveTo(x, -WORLD.H); ctx.lineTo(x, WORLD.H); ctx.stroke(); }
+    for (let y = -WORLD.H; y <= WORLD.H; y += 4) { ctx.beginPath(); ctx.moveTo(-WORLD.W, y); ctx.lineTo(WORLD.W, y); ctx.stroke(); }
+
+    // objects
+    for (const o of GAME.objects) if (!o.dead) o.draw(ctx);
+
+    // player
+    GAME.player.draw(ctx);
+
+    // particles on top
+    for (const p of GAME.particles) if (!p.dead) p.draw(ctx);
+  }
+
+  // -----------------------------
+  // Main Loop
+  // -----------------------------
+  let last = performance.now();
+  function tick() {
+    const t = performance.now();
+    let dt = (t - last) / 1000; last = t; dt = Math.min(0.05, dt);
+
+    if (GAME.running) {
+      GAME.time -= dt; if (GAME.time <= 0) { GAME.time = 0; endGame(); }
+      UI.setTime(GAME.time);
+      updateWorld(dt);
+    }
+
+    drawWorld();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // -----------------------------
+  // UI Buttons & Flow
+  // -----------------------------
+  const btnStart = document.getElementById('btn-start');
+  const btnHow = document.getElementById('btn-how');
+  const btnPause = document.getElementById('btn-pause');
+  const btnRestart = document.getElementById('btn-restart');
+  const btnZoom = document.getElementById('btn-zoom');
+  const btnResume = document.getElementById('btn-resume');
+  const btnExit = document.getElementById('btn-exit');
+
+  function startGame() {
+    GAME.running = true; UI.showBanner('', '', false); UI.showToast('Go!');
+  }
+  function endGame() {
+    GAME.running = false; UI.showBanner('Time Up!', `Final Score: ${fmt(GAME.player.score)}\nBest Combo: ${GAME.player.bestCombo}x`); resetStick();
+  }
+
+  btnStart.addEventListener('click', startGame);
+  btnHow.addEventListener('click', () => {
+    UI.showBanner('How to Play', 'Use the left joystick or WASD/Arrow keys to move. Swallow things smaller than your hole. Each item gives points. Grow to eat bigger stuff. Avoid bonking into too-big objects—they break your combo. 3 minutes on the clock!');
+  });
+
+  btnPause.addEventListener('click', () => {
+    if (!GAME.running) return; GAME.running = false; UI.setPaused(true);
+  });
+  btnResume.addEventListener('click', () => { GAME.running = true; UI.setPaused(false); });
+  btnExit.addEventListener('click', () => { UI.setPaused(false); GAME.reset(); });
+  btnRestart.addEventListener('click', () => { GAME.reset(); startGame(); });
+  btnZoom.addEventListener('click', () => { GAME.zoomMode = (GAME.zoomMode+1)%3; Camera.targetZoom = [0.9, 1.15, 0.65][GAME.zoomMode]; });
+
+  // keyboard pause/restart
+  window.addEventListener('keydown', (e) => {
+    if (e.key === ' ') { GAME.player.dash = 0.22; }
+    if (e.key.toLowerCase() === 'p') { if (GAME.running) { GAME.running=false; UI.setPaused(true);} else { GAME.running=true; UI.setPaused(false);} }
+    if (e.key.toLowerCase() === 'r') { GAME.reset(); startGame(); }
+  });
+
+  // -----------------------------
+  // Accessibility: Prevent scroll on space/arrow when focused
+  // -----------------------------
+  window.addEventListener('keydown', (e) => {
+    const k = e.key; if (['ArrowUp','ArrowDown',' '].includes(k)) { e.preventDefault(); }
+  }, { passive: false });
+
+  // -----------------------------
+  // Extra Flavor: Dynamic Spawners & Milestones
+  // -----------------------------
+  const MILESTONES = [
+    { sz: .8,  txt: 'You can eat cones and cans easily.' },
+    { sz: 1.2, txt: 'Small plants and bins now edible.' },
+    { sz: 1.6, txt: 'People and scooters are fair game.' },
+    { sz: 2.2, txt: 'Cars beware.' },
+    { sz: 3.2, txt: 'Trees topple before you.' },
+    { sz: 4.6, txt: 'Buses go brrrr.' },
+    { sz: 6.0, txt: 'Kiosks and statues tremble.' },
+    { sz: 8.0, txt: 'Entire houses vanish.' },
+  ];
+  let nextMilestone = 0;
+
+  function checkMilestones() {
+    const r = GAME.player.r;
+    if (nextMilestone < MILESTONES.length && r >= MILESTONES[nextMilestone].sz) {
+      UI.showToast(MILESTONES[nextMilestone].txt, 1800);
+      nextMilestone++;
+    }
+  }
+
+  // spawn extra micros to keep fun at start
+  setInterval(() => {
+    if (!GAME.running || GAME.time < 10) return;
+    const p = GAME.player; const d = 28; // spawn just offscreen
+    const angle = rand(0, TAU); const dist = rand(20, 32);
+    const x = p.x + Math.cos(angle)*dist; const y = p.y + Math.sin(angle)*dist;
+    const type = pick(OBJECT_TYPES.slice(0, 6)); // small set
+    const o = new Obj(type, x, y); GAME.objects.push(o); GAME.entities.push(o);
+  }, 1500);
+
+  // milestone check loop
+  setInterval(() => { if (GAME.running) checkMilestones(); }, 500);
+
+  // -----------------------------
+  // Debug Panel (toggle with `)` key)
+  // -----------------------------
+  let showDebug = false;
+  window.addEventListener('keydown', (e)=>{ if (e.key === ')') { showDebug = !showDebug; UI.debug.style.display = showDebug?'block':'none'; }});
+  setInterval(() => {
+    if (!showDebug) return; const p = GAME.player;
+    UI.debug.textContent = `objs:${GAME.objects.length}  r:${p.r.toFixed(2)}  score:${fmt(p.score)}  combo:${p.combo}  zoom:${Camera.zoom.toFixed(2)}`;
+  }, 200);
+
+  // -----------------------------
+  // Start Screen
+  // -----------------------------
+  UI.showBanner('City Chomp', 'Drag the stick to move. Eat small things to grow. Bigger you are → bigger things you can swallow.');
+
+  // Ensure initial toast for mobile users once they touch screen
+  window.addEventListener('touchstart', ()=>{ UI.showToast('Drag the stick to move'); }, { once: true, passive: true });
+
+  // -----------------------------
+  // End of File — happy chomping!
+  // -----------------------------
+  </script>
+</body>
+</html>
